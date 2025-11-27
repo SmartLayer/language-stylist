@@ -15,6 +15,9 @@ set ::PROMPTS_DIR [file join $::APP_DIR "prompts"]
 # Test mode flag
 set ::TEST_MODE 0
 
+# Auto-close mode: auto-transform with saved prompt and copy result to clipboard
+set ::AUTOCLOSE_MODE 0
+
 # Current state
 set ::currentPrompt ""
 set ::httpToken ""
@@ -31,11 +34,13 @@ set ::apiModel ""
 #==============================================================================
 
 proc parseArguments {} {
-    global argc argv TEST_MODE
-    
+    global argc argv TEST_MODE AUTOCLOSE_MODE
+
     foreach arg $argv {
         if {$arg eq "--test"} {
             set TEST_MODE 1
+        } elseif {$arg eq "--autoclose" || $arg eq "-autoclose" || $arg eq "--auto-close" || $arg eq "-auto-close"} {
+            set AUTOCLOSE_MODE 1
         }
     }
 }
@@ -198,11 +203,24 @@ proc readClipboard {} {
 #==============================================================================
 
 proc showError {message} {
-    global TEST_MODE
+    global TEST_MODE AUTOCLOSE_MODE
+    
+    # Always log to stderr for debugging
+    puts stderr "ERROR: $message"
     
     if {$TEST_MODE} {
-        puts stderr "ERROR: $message"
         exit 1
+    } elseif {$AUTOCLOSE_MODE} {
+        # In autoclose mode, show brief dialog then exit with error
+        wm title . "Language Stylist - Error"
+        wm geometry . 400x200
+        
+        pack [frame .f -padx 20 -pady 20] -fill both -expand 1
+        pack [label .f.msg -text $message -wraplength 360 -justify left] -pady 10
+        pack [ttk::button .f.ok -text "OK" -command {exit 1}] -pady 10
+        
+        # Auto-close after 5 seconds with error code
+        after 5000 {exit 1}
     } else {
         # Create error dialog
         wm title . "Language Stylist - Error"
@@ -416,6 +434,7 @@ proc callDeepSeekAPI {systemPrompt userText} {
     
     # Make async request
     if {[catch {
+        puts stderr "INFO: Making API request to $url"
         set httpToken [http::geturl $url \
             -method POST \
             -headers $headers \
@@ -430,49 +449,51 @@ proc callDeepSeekAPI {systemPrompt userText} {
 
 proc handleAPIResponse {token} {
     global httpToken transformedText TEST_MODE
-    
+
     set httpToken ""
-    
+
+    set status [http::status $token]
+    set ncode [http::ncode $token]
+    set data [http::data $token]
+
+    http::cleanup $token
+
+    if {$status ne "ok"} {
+        displayError "Network error: $status"
+        return
+    }
+
+    if {$ncode != 200} {
+        displayError "API error (HTTP $ncode):\n$data"
+        return
+    }
+
+    # Parse response
     if {[catch {
-        set status [http::status $token]
-        set ncode [http::ncode $token]
-        set data [http::data $token]
-        
-        http::cleanup $token
-        
-        if {$status ne "ok"} {
-            displayError "Network error: $status"
-            return
-        }
-        
-        if {$ncode != 200} {
-            displayError "API error (HTTP $ncode):\n$data"
-            return
-        }
-        
-        # Parse response
         package require json
         set response [json::json2dict $data]
-        
+
         if {[dict exists $response choices]} {
             set choices [dict get $response choices]
             set firstChoice [lindex $choices 0]
             if {[dict exists $firstChoice message content]} {
                 set transformedText [dict get $firstChoice message content]
                 displayResult $transformedText
-                return
+            } else {
+                displayError "Unexpected API response format: missing message content"
             }
+        } else {
+            displayError "Unexpected API response format: missing choices"
         }
-        
-        displayError "Unexpected API response format"
-        
-    } err]} {
-        displayError "Error processing API response:\n$err"
+
+    } err opt]} {
+        set errorInfo [dict get $opt -errorinfo]
+        displayError "Error processing API response:\n$err\n\nDetails:\n$errorInfo"
     }
 }
 
 proc displayResult {text} {
-    global TEST_MODE
+    global TEST_MODE AUTOCLOSE_MODE
     
     if {$TEST_MODE} {
         puts $text
@@ -484,15 +505,29 @@ proc displayResult {text} {
         .bottom.text configure -state disabled
         .bottom.copy configure -state normal
         focus .bottom.copy
+        
+        if {$AUTOCLOSE_MODE} {
+            # Auto-copy to clipboard and exit
+            puts stderr "SUCCESS: Transformation complete, copying to clipboard"
+            copyAndExit
+        }
     }
 }
 
 proc displayError {message} {
-    global TEST_MODE
-    
+    global TEST_MODE AUTOCLOSE_MODE
+
+    # Always log to stderr for debugging
+    puts stderr "ERROR: $message"
+
     if {$TEST_MODE} {
-        puts stderr "ERROR: $message"
+        flush stderr
         exit 1
+    } elseif {$AUTOCLOSE_MODE} {
+        # In autoclose mode, destroy window which will exit the event loop
+        flush stderr
+        flush stdout
+        destroy .
     } else {
         .bottom.text configure -state normal -background #ffe0e0
         .bottom.text delete 1.0 end
@@ -507,10 +542,14 @@ proc displayError {message} {
 
 proc copyAndExit {} {
     global transformedText
-    
+
     clipboard clear
     clipboard append $transformedText
-    exit 0
+    puts stderr "INFO: Text copied to clipboard, exiting"
+    flush stderr
+    flush stdout
+    # Give the clipboard operation time to complete before exiting
+    after 5000 {destroy .}
 }
 
 #==============================================================================
@@ -518,10 +557,14 @@ proc copyAndExit {} {
 #==============================================================================
 
 proc main {} {
-    global currentPrompt prompts
+    global currentPrompt prompts AUTOCLOSE_MODE
     
     # Parse command line arguments
     parseArguments
+    
+    if {$AUTOCLOSE_MODE} {
+        puts stderr "INFO: Autoclose mode enabled"
+    }
     
     # Load configurations
     loadDeepSeekConfig
@@ -552,6 +595,10 @@ proc main {} {
     }
     if {!$found} {
         set currentPrompt [lindex [lindex $prompts 0] 0]
+    }
+    
+    if {$AUTOCLOSE_MODE} {
+        puts stderr "INFO: Using prompt '$currentPrompt'"
     }
     
     # Auto-start transformation with last/first prompt

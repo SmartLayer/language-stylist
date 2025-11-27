@@ -29,6 +29,14 @@ echo "Your text here" | xclip -selection clipboard && ./language-stylist.tcl --t
 
 Outputs transformed text to stdout and exits automatically.
 
+### Autoclose Mode
+
+```bash
+./language-stylist.tcl --autoclose 2>/tmp/stylist.log
+```
+
+Automatically transforms using the last-used prompt, copies the result to clipboard, and exits. All errors and status messages are written to stderr for debugging. If an error occurs, the window stays open for 5 seconds before exiting with a non-zero exit code.
+
 ## Adding Prompts
 
 Create `.txt` files in `prompts/` directory. Filename becomes the button label.
