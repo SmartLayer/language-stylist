@@ -485,6 +485,14 @@ proc callDeepSeekAPI {systemPrompt userText} {
     
     # Build JSON payload and encode to UTF-8
     set jsonPayload [buildJSONPayload $apiModel $systemPrompt $userText]
+    # Microsoft Graph API (OneDrive) returns:
+    # Content-Type: application/json; charset=utf-8
+    # When the charset is specified, Tcl's http package automatically decodes the response. Adding encoding convertfrom utf-8 double-decodes it → garbage.
+
+    # LLM APIs (OpenAI/Claude style) often return:
+    # Content-Type: application/json
+    # Without the charset, Tcl's http package returns raw bytes. You need encoding convertfrom utf-8 to decode properly.
+
     set jsonPayload [encoding convertto utf-8 $jsonPayload]
     
     set url "${apiBase}/chat/completions"
@@ -517,7 +525,7 @@ proc handleAPIResponse {token} {
 
     set status [http::status $token]
     set ncode [http::ncode $token]
-    set data [http::data $token]
+    set data [encoding convertfrom utf-8 [http::data $token]]
 
     http::cleanup $token
 
@@ -541,6 +549,8 @@ proc handleAPIResponse {token} {
             set firstChoice [lindex $choices 0]
             if {[dict exists $firstChoice message content]} {
                 set transformedText [dict get $firstChoice message content]
+                # Replace em dash with regular dash (em dash is considered an AI marker)
+                set transformedText [string map {— " - "} $transformedText]
                 displayResultInTab $tabIdx $transformedText
             } else {
                 displayErrorInTab $tabIdx "Unexpected API response format: missing message content"
