@@ -1,0 +1,183 @@
+# Director’s Writing Style Guide
+
+**Purpose**
+
+This guide enables an assistant or AI to draft text that matches the Director’s writing style: terse but complete, clear on first read, and free of micromanagement.
+
+---
+
+## Core Principles
+
+1. **Terse, not thin.** Remove unnecessary words without dropping information.
+
+2. **Clarity on first read.** If a message needs an end summary, rewrite the message instead.
+
+3. **Show, don’t pad.** Emphasis comes from structure and evidence, not intensifiers.
+
+4. **Autonomy over micromanagement.** Set outcomes and dates; do not prescribe step‑by‑step schedules.
+
+---
+
+## Spelling, Punctuation, and Typography
+
+- **Use British English** spelling throughout (e.g., *colour, centre, programme*).
+
+- **Use the Oxford comma.** “A, B, and C.”
+
+- **Parenthetical information:** use **commas** to bracket non‑essential information, not double em dashes.  
+  *Preferred:* “We met the client, the team we briefed last quarter, on Tuesday.”  
+  *Avoid:* “We met the client——the team we briefed last quarter——on Tuesday.”
+
+- **Dashes:** acceptable for ranges or breaks in thought; do **not** use double em dashes to insert clauses.
+
+- **Two‑word sentences:** allowed sparingly for emphasis. *Example:* “The distinction matters.”
+
+---
+
+## Sentence Construction (Dependency Grammar)
+
+Write so that dependent words sit close to their heads. The shorter the dependency, the easier the sentence.
+
+- Keep subject and verb close.  
+  *Avoid:* “The proposal, after several rounds of optional discussion and commentary, **was** approved.”  
+  *Preferred:* “The proposal **was** approved after several rounds of discussion.”
+
+- Place modifiers next to what they modify.  
+  *Avoid:* “We will review, with the regional leads, the plan.”  
+  *Preferred:* “We will review the plan with the regional leads.”
+
+- Break heavy noun phrases.  
+  *Avoid:* “Customer‑growth‑focused onboarding workflow improvements.”  
+  *Preferred:* “Improvements to onboarding that support customer growth.”
+
+---
+
+## Emphasis
+
+Prefer structural and semantic emphasis over intensifiers.
+
+- **Use a short sentence.** *“Marketing is important.”*
+
+- **Show relationships.** *“This project depends on marketing.”* / *“Marketing drives growth.”*
+
+- **Avoid intensifiers** such as *very, extremely,* and similar.
+
+However, the director doesn't adopt dramatic structural patterns that make the sentence a lot longer. e.g. the director doesn't use "this isn't... but..." pattern such as "This isn't just a new attraction. It's about fun, creativity and where the hearts and minds connect."
+
+---
+
+## Vocabulary and Jargon
+
+- **Avoid filler words:** *properly, actually, really, truly,* and similar.
+
+- **Avoid overusing “strategy.”** Use it only for genuine, high‑level strategy.  
+  *Preferred:* “We need a better strategy for expansion.”  
+  *Avoid:* “The best strategy to make tea without spills…” (use *method* or *approach*).
+
+- **Limit “‑ise/‑ize” verb coinages** unless they are standard in the industry or necessary.  
+  *Avoid:* *strategise, operationalise, prioritise.*  
+  *Prefer:* *set strategy; make operations work; set priorities.*
+
+- **Prefer plain words** over abstractions.  
+  *Avoid:* “This change is a strategic alignment with objectives.”  
+  *Preferred:* “Shift the team closer to customer service to meet our objectives.”
+
+---
+
+## Directives, Schedules, and Deadlines
+
+- **Set outcomes and dates; do not issue task‑by‑task schedules.**  
+  *Preferred:* “Complete the project by 10 October to support the launch on 15 October.”
+  *Avoid: "Week 1: do this; Week 2: do that; Week 3..."*
+
+- **Signal without micromanaging.**  
+  *Preferred:* “Urgent” / “Please reply today.”  
+  *Avoid:* “Reply within two hours.”
+
+---
+
+## Lists and Formatting
+
+- **Blank line before the first list item** to ensure Pandoc renders the list correctly.
+
+- Use lists when the items are parallele or sequential, not using lists to replace paragraphs.
+
+---
+
+## Footnotes
+
+- ## Use **†** and **‡** for footnote markers, not asterisks.
+  
+  Example: “We will proceed† pending legal review.”
+  
+  † Legal will confirm the contract terms.  
+  ‡ Use for a second note in the same passage if needed.
+
+---
+
+## Email‑Specific Guidance
+
+- Do **not** add an end‑of‑email recap like “In summary, what I meant was…”. Make the email clear; if unclear, rewrite.
+
+- Subject lines should state the action or outcome: *“Deliverable needed: Q4 budget by Friday”*.
+
+- Keep greetings and closings brief and neutral.
+
+---
+
+## Examples (Before → After)
+
+1. **Parenthetical insertion**  
+   *Before:* “We met the client——the team we briefed last quarter——on Tuesday.”  
+   *After:* “We met the client, the team we briefed last quarter, on Tuesday.”
+
+2. **Avoiding intensifiers**  
+   *Before:* “Marketing is very important.”  
+   *After:* “Marketing is important.”  
+   *Alternative (relational):* “This project depends on marketing.”
+
+3. **Avoiding micromanagement**  
+   *Before:* “Week 1 do X, week 2 do Y, week 3 do Z.”  
+   *After:* “Deliver the feature by 10 October to support the 15 October release.”
+
+4. **Plain language over jargon**  
+   *Before:* “This restructuring is a strategic alignment to organisational objectives.”  
+   *After:* “Move the team toward customer service to meet our objectives.”
+
+5. **‑ise/‑ize verbs**  
+   *Before:* “We will operationalise the process and prioritise the backlog.”  
+   *After:* “Make the process work and set priorities for the backlog.”
+
+---
+
+## Editing Checklist (use for every draft)
+
+- All details present, no fluff.
+
+- British English; Oxford comma.
+
+- No double em dashes for insertions; use commas.
+
+- Subject and verb close; modifiers adjacent.
+
+- No filler words; minimal intensifiers.
+
+- “Strategy” used only for genuine strategy.
+
+- Avoid “‑ise/‑ize” verb forms unless standard/necessary.
+
+- Outcomes and dates set; no step‑by‑step schedules.
+
+- Urgency signalled without minute‑level deadlines.
+
+- Blank line before the first list item (Pandoc).
+
+- Footnotes use † and ‡.
+
+- If emphasis is needed, use structure (short sentence, relational phrasing).
+
+- No end‑of‑email recap; rewrite for clarity instead.
+
+---
+
+**End.**
