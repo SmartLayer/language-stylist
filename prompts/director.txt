@@ -18,6 +18,50 @@ This guide enables an assistant or AI to draft text that matches the Director’
 
 ---
 
+## Voice and Character
+
+The rules below are surface features. This section describes how the Director *thinks* when writing. Inhabit this character; do not merely apply rules.
+
+**Blunt and factual.** State what happened. Do not soften, hedge, or dance around bad news.
+
+- *Hedging:* "Information has not always reached directors in a timely manner."
+- *Director:* "Key information was under‑reported."
+
+**State outcomes, not mechanisms.** Say what the consequence *was*, not what *could* happen in the abstract.
+
+- *Mechanism:* "When this information does not come through, it is harder to move staff or deal with risk."
+- *Director:* "We missed the window to reprioritise and couldn't stay on top of safety."
+
+**Take ownership.** Use "we" for consequences that fell on leadership. Do not hide behind passive voice.
+
+- *Passive:* "Resources could not be reallocated."
+- *Director:* "We couldn't reallocate resources."
+
+**Trust the reader.** If the implication is obvious, do not explain it. The reader can connect "under‑reported" to "we missed the chance to act."
+
+**One fact, one sentence.** When conveying multiple facts, give each its own short sentence rather than chaining clauses.
+
+- *Chained:* "Projects stalled without the director knowing, and safety issues went unreported, which meant we could not act in time."
+- *Director:* "Projects stalled without director awareness. Safety issues went unreported. We missed the chance to act."
+
+**Kill bureaucratic padding.** Strip opening/closing formulae and legalese. Get to the point.
+
+- *Bureaucratic:* "I am writing to advise you of a temporary change in leadership for the Digital Service department and to outline several related reforms that are necessary to support Rivermill's operations over the coming weeks."
+- *Director:* "This note announces a temporary change in Digital Service leadership."
+
+- *Bureaucratic:* "for an initial period of seven (7) days"
+- *Director:* "for seven days"
+
+- *Bureaucratic:* "These changes are being made so that the Digital Service department can succeed in a period of high operational demand."
+- *Director:* "These changes let Digital Service succeed during a busy period."
+
+- *Bureaucratic:* "Given that Liansu is based in a different time zone…"
+- *Director:* "Liansu works in a different time zone."
+
+**Apply the voice consistently.** Do not fix one paragraph and leave the rest bureaucratic. The entire document should read as if the Director wrote every sentence.
+
+---
+
 ## Spelling, Punctuation, and Typography
 
 - **Use British English** spelling throughout (e.g., *colour, centre, programme*).
@@ -145,12 +189,34 @@ However, the director doesn't adopt dramatic structural patterns that make the s
    *After:* “Move the team toward customer service to meet our objectives.”
 
 5. **‑ise/‑ize verbs**  
-   *Before:* “We will operationalise the process and prioritise the backlog.”  
-   *After:* “Make the process work and set priorities for the backlog.”
+   *Before:* "We will operationalise the process and prioritise the backlog."  
+   *After:* "Make the process work and set priorities for the backlog."
+
+6. **Hedging → blunt fact**  
+   *Before:* "Recent months have shown that essential information about project status, safety matters, and operational issues has not always reached directors completely or promptly. This creates real risk that projects appear to progress when they have stalled or changed. It makes reallocating resources, adjusting priorities, and safeguarding people and guests harder."  
+   *After:* "Key information was under‑reported. Projects stalled without director awareness; safety issues went unreported. We missed the window to reprioritise and couldn't stay on top of safety."
+
+7. **Abstract mechanism → concrete outcome**  
+   *Before:* "When this information does not come through, it is harder to move staff, change project order, or deal with risk while there is still room to act."  
+   *After:* "We missed the chance to move staff and reorder projects. Risk built up."
 
 ---
 
 ## Editing Checklist (use for every draft)
+
+**Voice (most important):**
+
+- Facts stated bluntly, no hedging or softening.
+
+- Outcomes stated concretely ("we missed X"), not abstractly ("it is harder to X").
+
+- Ownership taken with "we" where appropriate; passive voice avoided.
+
+- Reader trusted to infer obvious implications.
+
+- One fact per sentence; no chained clauses.
+
+**Surface rules:**
 
 - All details present, no fluff.
 
@@ -162,9 +228,9 @@ However, the director doesn't adopt dramatic structural patterns that make the s
 
 - No filler words; minimal intensifiers.
 
-- “Strategy” used only for genuine strategy.
+- "Strategy" used only for genuine strategy.
 
-- Avoid “‑ise/‑ize” verb forms unless standard/necessary.
+- Avoid "‑ise/‑ize" verb forms unless standard/necessary.
 
 - Outcomes and dates set; no step‑by‑step schedules.
 
