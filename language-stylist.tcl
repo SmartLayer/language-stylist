@@ -187,8 +187,12 @@ proc getPromptContent {promptName} {
 proc readClipboard {} {
     global clipboardText
     
-    if {[catch {clipboard get} content]} {
-        return 0
+    # Try UTF8_STRING first for proper Unicode support
+    if {[catch {clipboard get -type UTF8_STRING} content]} {
+        # Fall back to default STRING type if UTF8_STRING not available
+        if {[catch {clipboard get} content]} {
+            return 0
+        }
     }
     
     set content [string trim $content]
