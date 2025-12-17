@@ -15,12 +15,61 @@ set ::SYSTEM_PROMPTS_FILE [file join $::APP_DIR "system-prompts.yaml"]
 
 # System prompt components (loaded from YAML)
 set ::userTextPrefix ""
+set ::singlePassPrefix ""
+
+# First-pass analysis prompt (semantic guardrails)
+set ::FIRST_PASS_PROMPT {You are a semantic analysis assistant. Your task is to analyze the input text and identify elements that must be preserved during style editing.
+
+Analyze the text and output ONLY valid JSON with this structure:
+{
+  "preserve": [
+    {"span": "exact text", "reason": "why it must be kept", "category": "proper_noun|domain_term|qualifier_semantic|constraint|other"}
+  ],
+  "intensifiers": [
+    {"span": "word", "keep": true|false, "reason": "literal meaning vs stylistic emphasis", "confidence": 0-100}
+  ],
+  "ambiguities": [
+    {
+      "span": "ambiguous text",
+      "interpretations": [
+        {"meaning": "interpretation A", "probability": 70, "evidence": "why this is likely"},
+        {"meaning": "interpretation B", "probability": 30, "evidence": "why this is less likely"}
+      ]
+    }
+  ],
+  "rewrite_constraints": ["constraint 1", "constraint 2"]
+}
+
+Guidelines:
+1. PRESERVED TERMS: Identify domain terms, proper nouns, and semantic qualifiers that carry specific meaning. Context determines whether a word is a term:
+   - "VIP list" in "if guests are on the VIP list" = domain term (a specific list), must preserve
+   - "VIP" in "feels like a VIP" = figurative, can be rewritten
+   - "board resolution" = legal document distinct from meeting minutes, must preserve
+   - "dire need" when discussing paying customers/startup failure = semantic qualifier encoding urgency, must preserve
+
+2. INTENSIFIERS: Analyze words that look like intensifiers (very, extremely, dire, critical, suicidal, etc.):
+   - If literal/semantic (e.g., "suicidal" in medical context with warning signs) → keep: true, high confidence
+   - If hyperbolic/stylistic (e.g., "suicidal" describing a risky business decision) → keep: false, lower confidence
+
+3. AMBIGUITIES: Identify sentences with multiple valid interpretations. Use surrounding context to assign probabilities:
+   - "sleep time to be blocked and 30min / 15min links are made" has two interpretations:
+     A) sleep time blocked; booking links created (more likely if context is about setting up interviews)
+     B) both items blocked (less likely given "links are made" implies creation)
+
+4. REWRITE CONSTRAINTS: Provide clear instructions for the style pass, e.g.:
+   - "Preserve 'dire need' - encodes urgency and willingness-to-pay"
+   - "Treat 'sleep time to be blocked' and '30min/15min links are made' as two separate actions"
+
+Output ONLY the JSON object, no other text.}
 
 # Test mode flag
 set ::TEST_MODE 0
 
 # Auto-close mode: auto-transform with saved prompt and copy result to clipboard
 set ::AUTOCLOSE_MODE 0
+
+# Two-pass mode: use semantic analysis first pass (default is 1-pass)
+set ::TWO_PASS_MODE 0
 
 # Current state
 set ::currentPrompt ""
@@ -35,18 +84,26 @@ set ::apiKey ""
 set ::apiBase ""
 set ::apiModel ""
 
+# Log file for debugging two-pass pipeline
+set ::LOG_FILE [file join $::APP_DIR "language-stylist.log"]
+
+# First-pass analysis result (per tab)
+array set ::firstPassResult {}
+
 #==============================================================================
 # ARGUMENT PARSING
 #==============================================================================
 
 proc parseArguments {} {
-    global argc argv TEST_MODE AUTOCLOSE_MODE
+    global argc argv TEST_MODE AUTOCLOSE_MODE TWO_PASS_MODE
 
     foreach arg $argv {
         if {$arg eq "--test"} {
             set TEST_MODE 1
         } elseif {$arg eq "--autoclose" || $arg eq "-autoclose" || $arg eq "--auto-close" || $arg eq "-auto-close"} {
             set AUTOCLOSE_MODE 1
+        } elseif {$arg eq "--2pass" || $arg eq "-2pass" || $arg eq "--two-pass" || $arg eq "-two-pass"} {
+            set TWO_PASS_MODE 1
         }
     }
 }
@@ -135,7 +192,7 @@ proc loadDeepSeekConfig {} {
 set ::prompts {}
 
 proc loadSystemPrompts {} {
-    global SYSTEM_PROMPTS_FILE userTextPrefix
+    global SYSTEM_PROMPTS_FILE userTextPrefix singlePassPrefix
 
     if {![file exists $SYSTEM_PROMPTS_FILE]} {
         showError "System prompts file not found: $SYSTEM_PROMPTS_FILE"
@@ -154,6 +211,12 @@ proc loadSystemPrompts {} {
             set userTextPrefix [dict get $config user_text_prefix]
         } else {
             set userTextPrefix ""
+        }
+
+        if {[dict exists $config single_pass_prefix]} {
+            set singlePassPrefix [dict get $config single_pass_prefix]
+        } else {
+            set singlePassPrefix ""
         }
     } err]} {
         showError "Error loading system prompts:\n$err"
@@ -233,6 +296,36 @@ proc readClipboard {} {
     
     set clipboardText $content
     return 1
+}
+
+#==============================================================================
+# LOGGING
+#==============================================================================
+
+proc logPipelineRun {original firstPassJson stylePrompt finalOutput} {
+    global LOG_FILE
+
+    set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+    set delimiter "================================================================================"
+
+    if {[catch {
+        set f [open $LOG_FILE a]
+        puts $f $delimiter
+        puts $f "TIMESTAMP: $timestamp"
+        puts $f $delimiter
+        puts $f "\n--- ORIGINAL INPUT ---"
+        puts $f $original
+        puts $f "\n--- FIRST-PASS ANALYSIS (JSON) ---"
+        puts $f $firstPassJson
+        puts $f "\n--- STYLE PROMPT ---"
+        puts $f $stylePrompt
+        puts $f "\n--- FINAL OUTPUT ---"
+        puts $f $finalOutput
+        puts $f "\n"
+        close $f
+    } err]} {
+        puts stderr "WARNING: Could not write to log file: $err"
+    }
 }
 
 #==============================================================================
@@ -409,11 +502,11 @@ proc selectPrompt {promptName tabIdx} {
 }
 
 proc transformText {tabIdx} {
-    global currentPrompt clipboardText tabTextWidgets prompts
+    global currentPrompt clipboardText tabTextWidgets prompts TWO_PASS_MODE
 
     # Get the prompt name for this specific tab
     set promptName [lindex [lindex $prompts $tabIdx] 0]
-    
+
     set systemPrompt [getPromptContent $promptName]
     if {$systemPrompt eq ""} {
         displayErrorInTab $tabIdx "Could not load prompt: $promptName"
@@ -424,12 +517,20 @@ proc transformText {tabIdx} {
     set textWidget $tabTextWidgets($tabIdx)
     $textWidget configure -state normal -background #f5f5f5
     $textWidget delete 1.0 end
-    $textWidget insert 1.0 "Processing with '$promptName'..."
-    $textWidget configure -state disabled
 
-    # Make API call - wrap text with prefix from system-prompts.yaml
-    set wrappedText "${userTextPrefix}${clipboardText}\n"
-    callDeepSeekAPI $systemPrompt $wrappedText $tabIdx
+    if {$TWO_PASS_MODE} {
+        # Two-pass mode: semantic analysis first, then style
+        $textWidget insert 1.0 "Doing 1st pass (semantic analysis)..."
+        $textWidget configure -state disabled
+        puts stderr "INFO: Doing 1st pass (semantic analysis) for tab $tabIdx"
+        callFirstPassAPI $clipboardText $tabIdx $promptName
+    } else {
+        # Single-pass mode: direct style transformation
+        $textWidget insert 1.0 "Processing..."
+        $textWidget configure -state disabled
+        puts stderr "INFO: Doing single-pass style transformation for tab $tabIdx"
+        callSinglePassAPI $clipboardText $tabIdx $promptName
+    }
 }
 
 #==============================================================================
@@ -491,10 +592,487 @@ proc buildJSONPayload {model systemPrompt userText} {
 }
 
 #==============================================================================
-# DEEPSEEK API INTEGRATION
+# SINGLE-PASS API CALL
 #==============================================================================
 
-proc callDeepSeekAPI {systemPrompt userText tabIdx} {
+proc callSinglePassAPI {originalText tabIdx promptName} {
+    global apiKey apiBase apiModel httpTokens userTextPrefix singlePassPrefix
+
+    package require http
+    package require tls
+
+    # Register TLS with proper options
+    if {[catch {
+        ::tls::init -autoservername true
+        http::register https 443 [list ::tls::socket -autoservername true]
+    } err]} {
+        # Fallback for older tls versions
+        http::register https 443 ::tls::socket
+    }
+
+    # Get the style guide and combine with single-pass prefix
+    set styleGuide [getPromptContent $promptName]
+    set systemPrompt "${singlePassPrefix}\n${styleGuide}"
+
+    # Build JSON payload
+    set wrappedText "${userTextPrefix}${originalText}\n"
+    set jsonPayload [buildJSONPayload $apiModel $systemPrompt $wrappedText]
+    set jsonPayload [encoding convertto utf-8 $jsonPayload]
+
+    set url "${apiBase}/chat/completions"
+    set headers [list \
+        Authorization "Bearer $apiKey" \
+        Content-Type "application/json; charset=utf-8"]
+
+    # Make async request
+    if {[catch {
+        puts stderr "INFO: Making single-pass API request for tab $tabIdx"
+        set token [http::geturl $url \
+            -method POST \
+            -headers $headers \
+            -type "application/json" \
+            -query $jsonPayload \
+            -timeout 60000 \
+            -command [list handleSinglePassResponse $tabIdx $originalText $promptName]]
+        set httpTokens($tabIdx) $token
+    } err]} {
+        displayErrorInTab $tabIdx "Failed to make API request:\n$err"
+    }
+}
+
+proc handleSinglePassResponse {tabIdx originalText promptName token} {
+    global httpTokens transformedText TEST_MODE processingTabs
+
+    # Clear this tab's token and processing state
+    if {[info exists httpTokens($tabIdx)]} {
+        unset httpTokens($tabIdx)
+    }
+    set processingTabs($tabIdx) 0
+
+    set status [http::status $token]
+    set ncode [http::ncode $token]
+    set data [encoding convertfrom utf-8 [http::data $token]]
+
+    http::cleanup $token
+
+    if {$status ne "ok"} {
+        displayErrorInTab $tabIdx "Network error: $status"
+        return
+    }
+
+    if {$ncode != 200} {
+        displayErrorInTab $tabIdx "API error (HTTP $ncode):\n$data"
+        return
+    }
+
+    # Parse response
+    if {[catch {
+        package require json
+        set response [json::json2dict $data]
+
+        if {[dict exists $response choices]} {
+            set choices [dict get $response choices]
+            set firstChoice [lindex $choices 0]
+            if {[dict exists $firstChoice message content]} {
+                set transformedText [dict get $firstChoice message content]
+                # Replace em dash with regular dash (em dash is considered an AI marker)
+                set transformedText [string map {— " - "} $transformedText]
+
+                # Log the run (with empty analysis for single-pass)
+                logPipelineRun $originalText "{}" $promptName $transformedText
+
+                displayResultInTab $tabIdx $transformedText
+            } else {
+                displayErrorInTab $tabIdx "Unexpected API response format: missing message content"
+            }
+        } else {
+            displayErrorInTab $tabIdx "Unexpected API response format: missing choices"
+        }
+    } err opt]} {
+        set errorInfo [dict get $opt -errorinfo]
+        displayErrorInTab $tabIdx "Error processing API response:\n$err\n\nDetails:\n$errorInfo"
+    }
+}
+
+#==============================================================================
+# TWO-PASS PIPELINE API CALLS
+#==============================================================================
+
+proc callFirstPassAPI {originalText tabIdx promptName} {
+    global apiKey apiBase apiModel httpTokens FIRST_PASS_PROMPT userTextPrefix
+
+    package require http
+    package require tls
+
+    # Register TLS with proper options
+    if {[catch {
+        ::tls::init -autoservername true
+        http::register https 443 [list ::tls::socket -autoservername true]
+    } err]} {
+        # Fallback for older tls versions
+        http::register https 443 ::tls::socket
+    }
+
+    # Build JSON payload for first pass
+    set wrappedText "${userTextPrefix}${originalText}\n"
+    set jsonPayload [buildJSONPayload $apiModel $FIRST_PASS_PROMPT $wrappedText]
+    set jsonPayload [encoding convertto utf-8 $jsonPayload]
+
+    set url "${apiBase}/chat/completions"
+    set headers [list \
+        Authorization "Bearer $apiKey" \
+        Content-Type "application/json; charset=utf-8"]
+
+    # Make async request
+    if {[catch {
+        puts stderr "INFO: Making first-pass API request for tab $tabIdx"
+        set token [http::geturl $url \
+            -method POST \
+            -headers $headers \
+            -type "application/json" \
+            -query $jsonPayload \
+            -timeout 60000 \
+            -command [list handleFirstPassResponse $tabIdx $originalText $promptName]]
+        set httpTokens($tabIdx) $token
+    } err]} {
+        displayErrorInTab $tabIdx "Failed to make first-pass API request:\n$err"
+    }
+}
+
+proc handleFirstPassResponse {tabIdx originalText promptName token} {
+    global httpTokens firstPassResult tabTextWidgets
+
+    # Clear this tab's token
+    if {[info exists httpTokens($tabIdx)]} {
+        unset httpTokens($tabIdx)
+    }
+
+    set status [http::status $token]
+    set ncode [http::ncode $token]
+    set data [encoding convertfrom utf-8 [http::data $token]]
+
+    http::cleanup $token
+
+    if {$status ne "ok"} {
+        displayErrorInTab $tabIdx "Network error in first pass: $status"
+        return
+    }
+
+    if {$ncode != 200} {
+        displayErrorInTab $tabIdx "API error in first pass (HTTP $ncode):\n$data"
+        return
+    }
+
+    # Parse response and extract JSON
+    if {[catch {
+        package require json
+        set response [json::json2dict $data]
+
+        if {[dict exists $response choices]} {
+            set choices [dict get $response choices]
+            set firstChoice [lindex $choices 0]
+            if {[dict exists $firstChoice message content]} {
+                set analysisJson [dict get $firstChoice message content]
+
+                # Try to extract JSON from the response (in case there's extra text)
+                set analysisJson [extractJSON $analysisJson]
+
+                # Validate it's valid JSON
+                if {[catch {json::json2dict $analysisJson} parsed]} {
+                    puts stderr "WARNING: First pass returned invalid JSON, retrying with stricter prompt"
+                    retryFirstPassStrict $tabIdx $originalText $promptName
+                    return
+                }
+
+                # Store the first-pass result
+                set firstPassResult($tabIdx) $analysisJson
+                puts stderr "INFO: First pass complete for tab $tabIdx"
+
+                # Now proceed to second pass (style rewrite)
+                callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+            } else {
+                displayErrorInTab $tabIdx "First pass: unexpected response format (missing message content)"
+            }
+        } else {
+            displayErrorInTab $tabIdx "First pass: unexpected response format (missing choices)"
+        }
+    } err opt]} {
+        set errorInfo [dict get $opt -errorinfo]
+        displayErrorInTab $tabIdx "Error processing first-pass response:\n$err\n\nDetails:\n$errorInfo"
+    }
+}
+
+proc extractJSON {text} {
+    # Try to extract JSON object from text that may have extra content
+    set start [string first "\{" $text]
+    if {$start == -1} {
+        return $text
+    }
+
+    # Find matching closing brace
+    set depth 0
+    set inString 0
+    set escape 0
+    set len [string length $text]
+
+    for {set i $start} {$i < $len} {incr i} {
+        set char [string index $text $i]
+
+        if {$escape} {
+            set escape 0
+            continue
+        }
+
+        if {$char eq "\\"} {
+            set escape 1
+            continue
+        }
+
+        if {$char eq "\"" && !$escape} {
+            set inString [expr {!$inString}]
+            continue
+        }
+
+        if {!$inString} {
+            if {$char eq "\{"} {
+                incr depth
+            } elseif {$char eq "\}"} {
+                incr depth -1
+                if {$depth == 0} {
+                    return [string range $text $start $i]
+                }
+            }
+        }
+    }
+
+    # If no matching brace found, return original
+    return $text
+}
+
+proc retryFirstPassStrict {tabIdx originalText promptName} {
+    global apiKey apiBase apiModel httpTokens FIRST_PASS_PROMPT userTextPrefix tabTextWidgets
+
+    # Update UI
+    set textWidget $tabTextWidgets($tabIdx)
+    $textWidget configure -state normal
+    $textWidget delete 1.0 end
+    $textWidget insert 1.0 "Retrying 1st pass (stricter JSON)..."
+    $textWidget configure -state disabled
+
+    package require http
+    package require tls
+
+    # Stricter prompt
+    set strictPrompt "${FIRST_PASS_PROMPT}\n\nIMPORTANT: Output ONLY the JSON object. No explanations, no markdown code blocks, no other text. Start with \{ and end with \}."
+
+    set wrappedText "${userTextPrefix}${originalText}\n"
+    set jsonPayload [buildJSONPayload $apiModel $strictPrompt $wrappedText]
+    set jsonPayload [encoding convertto utf-8 $jsonPayload]
+
+    set url "${apiBase}/chat/completions"
+    set headers [list \
+        Authorization "Bearer $apiKey" \
+        Content-Type "application/json; charset=utf-8"]
+
+    if {[catch {
+        puts stderr "INFO: Retrying first-pass with stricter prompt for tab $tabIdx"
+        set token [http::geturl $url \
+            -method POST \
+            -headers $headers \
+            -type "application/json" \
+            -query $jsonPayload \
+            -timeout 60000 \
+            -command [list handleFirstPassRetryResponse $tabIdx $originalText $promptName]]
+        set httpTokens($tabIdx) $token
+    } err]} {
+        # Fall back to single-pass on retry failure
+        puts stderr "WARNING: First pass retry failed, falling back to single-pass"
+        fallbackSinglePass $tabIdx $originalText $promptName
+    }
+}
+
+proc handleFirstPassRetryResponse {tabIdx originalText promptName token} {
+    global httpTokens firstPassResult
+
+    if {[info exists httpTokens($tabIdx)]} {
+        unset httpTokens($tabIdx)
+    }
+
+    set status [http::status $token]
+    set ncode [http::ncode $token]
+    set data [encoding convertfrom utf-8 [http::data $token]]
+
+    http::cleanup $token
+
+    if {$status ne "ok" || $ncode != 200} {
+        puts stderr "WARNING: First pass retry failed, falling back to single-pass"
+        fallbackSinglePass $tabIdx $originalText $promptName
+        return
+    }
+
+    if {[catch {
+        package require json
+        set response [json::json2dict $data]
+        set choices [dict get $response choices]
+        set firstChoice [lindex $choices 0]
+        set analysisJson [dict get $firstChoice message content]
+        set analysisJson [extractJSON $analysisJson]
+
+        # Validate JSON
+        if {[catch {json::json2dict $analysisJson}]} {
+            puts stderr "WARNING: First pass retry still invalid JSON, falling back to single-pass"
+            fallbackSinglePass $tabIdx $originalText $promptName
+            return
+        }
+
+        set firstPassResult($tabIdx) $analysisJson
+        puts stderr "INFO: First pass retry successful for tab $tabIdx"
+        callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+    } err]} {
+        puts stderr "WARNING: Error in retry response, falling back to single-pass"
+        fallbackSinglePass $tabIdx $originalText $promptName
+    }
+}
+
+proc fallbackSinglePass {tabIdx originalText promptName} {
+    global tabTextWidgets userTextPrefix firstPassResult
+
+    set textWidget $tabTextWidgets($tabIdx)
+    $textWidget configure -state normal
+    $textWidget delete 1.0 end
+    $textWidget insert 1.0 "Doing style pass (fallback mode)..."
+    $textWidget configure -state disabled
+
+    puts stderr "WARNING: Using single-pass fallback for tab $tabIdx"
+
+    # Set empty first-pass result
+    set firstPassResult($tabIdx) "{\"preserve\":[],\"intensifiers\":[],\"ambiguities\":[],\"rewrite_constraints\":[]}"
+
+    set systemPrompt [getPromptContent $promptName]
+    set wrappedText "${userTextPrefix}${originalText}\n"
+    callDeepSeekAPI $systemPrompt $wrappedText $tabIdx $originalText
+}
+
+proc callSecondPassAPI {tabIdx originalText promptName analysisJson} {
+    global apiKey apiBase apiModel httpTokens userTextPrefix tabTextWidgets
+
+    # Update UI
+    set textWidget $tabTextWidgets($tabIdx)
+    $textWidget configure -state normal
+    $textWidget delete 1.0 end
+    $textWidget insert 1.0 "Doing style pass..."
+    $textWidget configure -state disabled
+    puts stderr "INFO: Doing style pass for tab $tabIdx"
+
+    package require http
+    package require tls
+
+    # Get the style guide
+    set styleGuide [getPromptContent $promptName]
+
+    # Build the second-pass system prompt with constraints
+    set secondPassPrompt "You are a style editor. You will receive:
+1. A style guide to follow
+2. A semantic analysis with preservation constraints
+3. The original text to edit
+
+CRITICAL RULES:
+- The semantic analysis is AUTHORITATIVE. If there is any conflict between the style guide and the semantic constraints, the semantic constraints WIN.
+- DO NOT remove or replace preserved terms unless the analysis explicitly permits alternatives.
+- Resolve ambiguities using the interpretation with higher probability from the analysis.
+- If ambiguity probabilities are close (within 20 percentage points), keep the original wording for that span.
+- Preserve intensifiers marked with \"keep\": true.
+
+=== STYLE GUIDE ===
+$styleGuide
+
+=== SEMANTIC ANALYSIS (AUTHORITATIVE) ===
+$analysisJson
+
+=== END INSTRUCTIONS ==="
+
+    set wrappedText "${userTextPrefix}${originalText}\n"
+    set jsonPayload [buildJSONPayload $apiModel $secondPassPrompt $wrappedText]
+    set jsonPayload [encoding convertto utf-8 $jsonPayload]
+
+    set url "${apiBase}/chat/completions"
+    set headers [list \
+        Authorization "Bearer $apiKey" \
+        Content-Type "application/json; charset=utf-8"]
+
+    if {[catch {
+        puts stderr "INFO: Making second-pass API request for tab $tabIdx"
+        set token [http::geturl $url \
+            -method POST \
+            -headers $headers \
+            -type "application/json" \
+            -query $jsonPayload \
+            -timeout 60000 \
+            -command [list handleSecondPassResponse $tabIdx $originalText $promptName $analysisJson]]
+        set httpTokens($tabIdx) $token
+    } err]} {
+        displayErrorInTab $tabIdx "Failed to make second-pass API request:\n$err"
+    }
+}
+
+proc handleSecondPassResponse {tabIdx originalText promptName analysisJson token} {
+    global httpTokens transformedText TEST_MODE processingTabs
+
+    if {[info exists httpTokens($tabIdx)]} {
+        unset httpTokens($tabIdx)
+    }
+    set processingTabs($tabIdx) 0
+
+    set status [http::status $token]
+    set ncode [http::ncode $token]
+    set data [encoding convertfrom utf-8 [http::data $token]]
+
+    http::cleanup $token
+
+    if {$status ne "ok"} {
+        displayErrorInTab $tabIdx "Network error in style pass: $status"
+        return
+    }
+
+    if {$ncode != 200} {
+        displayErrorInTab $tabIdx "API error in style pass (HTTP $ncode):\n$data"
+        return
+    }
+
+    if {[catch {
+        package require json
+        set response [json::json2dict $data]
+
+        if {[dict exists $response choices]} {
+            set choices [dict get $response choices]
+            set firstChoice [lindex $choices 0]
+            if {[dict exists $firstChoice message content]} {
+                set transformedText [dict get $firstChoice message content]
+                # Replace em dash with regular dash (em dash is considered an AI marker)
+                set transformedText [string map {— " - "} $transformedText]
+
+                # Log the pipeline run
+                set stylePrompt [getPromptContent $promptName]
+                logPipelineRun $originalText $analysisJson $promptName $transformedText
+
+                displayResultInTab $tabIdx $transformedText
+            } else {
+                displayErrorInTab $tabIdx "Style pass: unexpected response format (missing message content)"
+            }
+        } else {
+            displayErrorInTab $tabIdx "Style pass: unexpected response format (missing choices)"
+        }
+    } err opt]} {
+        set errorInfo [dict get $opt -errorinfo]
+        displayErrorInTab $tabIdx "Error processing style pass response:\n$err\n\nDetails:\n$errorInfo"
+    }
+}
+
+#==============================================================================
+# DEEPSEEK API INTEGRATION (legacy single-pass, used for fallback)
+#==============================================================================
+
+proc callDeepSeekAPI {systemPrompt userText tabIdx {originalText ""}} {
     global apiKey apiBase apiModel httpTokens
     
     package require http
@@ -667,11 +1245,17 @@ proc displayErrorInTab {tabIdx message} {
 #==============================================================================
 
 proc main {} {
-    global currentPrompt prompts AUTOCLOSE_MODE notebook
-    
+    global currentPrompt prompts AUTOCLOSE_MODE TWO_PASS_MODE notebook
+
     # Parse command line arguments
     parseArguments
-    
+
+    if {$TWO_PASS_MODE} {
+        puts stderr "INFO: Two-pass mode enabled (semantic analysis + style)"
+    } else {
+        puts stderr "INFO: Single-pass mode (default)"
+    }
+
     if {$AUTOCLOSE_MODE} {
         puts stderr "INFO: Autoclose mode enabled"
     }
