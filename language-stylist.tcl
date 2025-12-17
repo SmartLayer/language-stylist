@@ -95,16 +95,34 @@ array set ::firstPassResult {}
 #==============================================================================
 
 proc parseArguments {} {
-    global argc argv TEST_MODE AUTOCLOSE_MODE TWO_PASS_MODE
+    global argv TEST_MODE AUTOCLOSE_MODE TWO_PASS_MODE
 
-    foreach arg $argv {
-        if {$arg eq "--test"} {
-            set TEST_MODE 1
-        } elseif {$arg eq "--autoclose" || $arg eq "-autoclose" || $arg eq "--auto-close" || $arg eq "-auto-close"} {
-            set AUTOCLOSE_MODE 1
-        } elseif {$arg eq "--2pass" || $arg eq "-2pass" || $arg eq "--two-pass" || $arg eq "-two-pass"} {
-            set TWO_PASS_MODE 1
-        }
+    package require cmdline
+
+    set options {
+        {test         "Run in test mode"}
+        {autoclose    "Auto-transform and close"}
+        {auto-close   "Auto-transform and close (alias)"}
+        {2pass        "Enable two-pass semantic analysis"}
+        {two-pass     "Enable two-pass semantic analysis (alias)"}
+    }
+
+    if {[catch {
+        array set params [::cmdline::getoptions argv $options]
+    } err]} {
+        puts stderr "Usage: language-stylist.tcl \[options\]"
+        puts stderr [::cmdline::usage $options]
+        exit 1
+    }
+
+    if {$params(test)} {
+        set TEST_MODE 1
+    }
+    if {$params(autoclose) || $params(auto-close)} {
+        set AUTOCLOSE_MODE 1
+    }
+    if {$params(2pass) || $params(two-pass)} {
+        set TWO_PASS_MODE 1
     }
 }
 
