@@ -384,7 +384,6 @@ proc showError {message} {
     } elseif {$AUTOCLOSE_MODE} {
         # In autoclose mode, show brief dialog then exit with error
         wm title . "Language Stylist - Error"
-        wm geometry . 400x200
         
         pack [frame .f -padx 20 -pady 20] -fill both -expand 1
         pack [label .f.msg -text $message -wraplength 360 -justify left] -pady 10
@@ -395,7 +394,6 @@ proc showError {message} {
     } else {
         # Create error dialog
         wm title . "Language Stylist - Error"
-        wm geometry . 400x200
         
         pack [frame .f -padx 20 -pady 20] -fill both -expand 1
         pack [label .f.msg -text $message -wraplength 360 -justify left] -pady 10
@@ -426,8 +424,6 @@ proc createUI {} {
 
     if {$TEST_MODE} {
         wm withdraw .
-    } else {
-        wm geometry . 700x600
     }
 
     # Top Frame - Original Text

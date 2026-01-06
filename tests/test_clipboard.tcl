@@ -4,7 +4,6 @@
 
 # Create main window title
 wm title . "Clipboard Test - Wish 8.6"
-wm geometry . 400x300
 
 # Create a frame for better layout
 pack [frame .f -padx 10 -pady 10] -fill both -expand 1
