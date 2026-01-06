@@ -108,8 +108,10 @@ set ::apiModel ""
 # Log file for debugging two-pass pipeline
 set ::LOG_FILE [file join $::APP_DIR "language-stylist.log"]
 
-# First-pass analysis result (per tab)
-array set ::firstPassResult {}
+# Two-pass shared state
+set ::analysisState "idle"        ;# idle | running | done | error
+set ::sharedAnalysisResult ""     ;# JSON from first-pass (shared across all tabs)
+set ::analysisStatusWidget ""     ;# Widget path for status label
 
 #==============================================================================
 # ARGUMENT PARSING
@@ -418,7 +420,7 @@ array set ::tabTextWidgets {}
 array set ::processingTabs {}
 
 proc createUI {} {
-    global clipboardText prompts currentPrompt TEST_MODE notebook
+    global clipboardText prompts currentPrompt TEST_MODE notebook TWO_PASS_MODE analysisStatusWidget
 
     wm title . "Language Stylist"
 
@@ -440,6 +442,13 @@ proc createUI {} {
     .top.text configure -state normal
     .top.text insert 1.0 $clipboardText
     .top.text configure -state disabled
+
+    # Analysis status bar (only in two-pass mode)
+    if {$TWO_PASS_MODE} {
+        pack [ttk::frame .analysis -padding "10 5"] -fill x
+        set analysisStatusWidget [ttk::label .analysis.status -text ""]
+        pack $analysisStatusWidget -anchor w
+    }
 
     # Middle Frame - Style Tabs (text widgets created lazily on first use)
     pack [ttk::frame .middle -padding 10] -fill both -expand 1
@@ -488,8 +497,20 @@ proc createTabTextWidget {tabIdx} {
     return $textWidget
 }
 
+proc updateAnalysisStatus {state} {
+    global analysisStatusWidget analysisState TWO_PASS_MODE
+    if {!$TWO_PASS_MODE || $analysisStatusWidget eq ""} return
+
+    set analysisState $state
+    switch $state {
+        "running" { $analysisStatusWidget configure -text "\u231B Analysing text..." }
+        "done"    { $analysisStatusWidget configure -text "\u2713 Analysis complete" }
+        "error"   { $analysisStatusWidget configure -text "\u2717 Analysis failed" }
+    }
+}
+
 proc onTabChanged {} {
-    global notebook prompts currentPrompt tabTextWidgets
+    global notebook prompts currentPrompt tabTextWidgets TWO_PASS_MODE analysisState
 
     set tabIdx [$notebook index current]
     if {$tabIdx < 0 || $tabIdx >= [llength $prompts]} {
@@ -499,7 +520,43 @@ proc onTabChanged {} {
     set promptName [lindex [lindex $prompts $tabIdx] 0]
     set tabFrame $notebook.tab$tabIdx
 
-    # Check if text widget exists (lazy creation)
+    # Always update current prompt for session save
+    set currentPrompt $promptName
+    saveSessionConfig $promptName
+
+    # Two-pass mode with shared analysis: different logic
+    if {$TWO_PASS_MODE} {
+        # Ensure text widget exists (lazy creation)
+        if {![winfo exists $tabFrame.text]} {
+            createTabTextWidget $tabIdx
+        }
+
+        # Check current state
+        set content [string trim [$tabFrame.text get 1.0 end]]
+
+        # If analysis is still running, just allow browsing (no styling yet)
+        if {$analysisState eq "running"} {
+            # Tab is ready, waiting for analysis to complete
+            return
+        }
+
+        # If already processing/styling or has result, do nothing
+        if {[string match "Styling*" $content] || [string match "Processing*" $content]} {
+            return
+        }
+        if {$content ne "" && ![string match "Error:*" $content]} {
+            # Has cached result
+            return
+        }
+
+        # Analysis is done and tab needs styling - trigger it
+        if {$analysisState eq "done"} {
+            selectPrompt $promptName $tabIdx
+        }
+        return
+    }
+
+    # Single-pass mode: original logic
     if {![winfo exists $tabFrame.text]} {
         # First click on this tab - create widget and call API
         createTabTextWidget $tabIdx
@@ -515,9 +572,7 @@ proc onTabChanged {} {
         return
     }
 
-    # Cached result - just update currentPrompt for session save
-    set currentPrompt $promptName
-    saveSessionConfig $promptName
+    # Cached result - nothing more to do
 }
 
 #==============================================================================
@@ -541,7 +596,7 @@ proc selectPrompt {promptName tabIdx} {
 }
 
 proc transformText {tabIdx} {
-    global currentPrompt clipboardText tabTextWidgets prompts TWO_PASS_MODE
+    global currentPrompt clipboardText tabTextWidgets prompts TWO_PASS_MODE sharedAnalysisResult analysisState
 
     # Get the prompt name for this specific tab
     set promptName [lindex [lindex $prompts $tabIdx] 0]
@@ -558,11 +613,19 @@ proc transformText {tabIdx} {
     $textWidget delete 1.0 end
 
     if {$TWO_PASS_MODE} {
-        # Two-pass mode: semantic analysis first, then style
-        $textWidget insert 1.0 "Doing 1st pass (semantic analysis)..."
-        $textWidget configure -state disabled
-        puts stderr "INFO: Doing 1st pass (semantic analysis) for tab $tabIdx"
-        callFirstPassAPI $clipboardText $tabIdx $promptName
+        # Two-pass mode with shared analysis
+        if {$analysisState eq "done" && $sharedAnalysisResult ne ""} {
+            # Analysis complete - go directly to style pass
+            $textWidget insert 1.0 "Styling..."
+            $textWidget configure -state disabled
+            puts stderr "INFO: Doing style pass for tab $tabIdx ($promptName)"
+            callSecondPassAPI $tabIdx $clipboardText $promptName $sharedAnalysisResult
+        } else {
+            # Analysis not ready - this shouldn't happen with proper guards
+            $textWidget insert 1.0 "Waiting for analysis..."
+            $textWidget configure -state disabled
+            puts stderr "WARNING: transformText called but analysis not ready (state: $analysisState)"
+        }
     } else {
         # Single-pass mode: direct style transformation
         $textWidget insert 1.0 "Processing..."
@@ -763,8 +826,10 @@ proc callFirstPassAPI {originalText tabIdx promptName} {
         Content-Type "application/json; charset=utf-8"]
 
     # Make async request
+    # tabIdx = -1 means shared analysis (two-pass mode)
+    set logMsg [expr {$tabIdx == -1 ? "shared" : "tab $tabIdx"}]
     if {[catch {
-        puts stderr "INFO: Making first-pass API request for tab $tabIdx"
+        puts stderr "INFO: Making first-pass API request ($logMsg)"
         set token [http::geturl $url \
             -method POST \
             -headers $headers \
@@ -772,18 +837,26 @@ proc callFirstPassAPI {originalText tabIdx promptName} {
             -query $jsonPayload \
             -timeout 60000 \
             -command [list handleFirstPassResponse $tabIdx $originalText $promptName]]
-        set httpTokens($tabIdx) $token
+        # Store token: use "shared" key for shared analysis
+        set tokenKey [expr {$tabIdx == -1 ? "shared" : $tabIdx}]
+        set httpTokens($tokenKey) $token
     } err]} {
-        displayErrorInTab $tabIdx "Failed to make first-pass API request:\n$err"
+        if {$tabIdx == -1} {
+            updateAnalysisStatus "error"
+            puts stderr "ERROR: Failed to make shared first-pass API request: $err"
+        } else {
+            displayErrorInTab $tabIdx "Failed to make first-pass API request:\n$err"
+        }
     }
 }
 
 proc handleFirstPassResponse {tabIdx originalText promptName token} {
-    global httpTokens firstPassResult tabTextWidgets
+    global httpTokens sharedAnalysisResult tabTextWidgets
 
-    # Clear this tab's token
-    if {[info exists httpTokens($tabIdx)]} {
-        unset httpTokens($tabIdx)
+    # Clear token (use "shared" key for shared analysis)
+    set tokenKey [expr {$tabIdx == -1 ? "shared" : $tabIdx}]
+    if {[info exists httpTokens($tokenKey)]} {
+        unset httpTokens($tokenKey)
     }
 
     set status [http::status $token]
@@ -792,13 +865,26 @@ proc handleFirstPassResponse {tabIdx originalText promptName token} {
 
     http::cleanup $token
 
+    # Error handling differs for shared vs per-tab analysis
+    set isShared [expr {$tabIdx == -1}]
+
     if {$status ne "ok"} {
-        displayErrorInTab $tabIdx "Network error in first pass: $status"
+        if {$isShared} {
+            updateAnalysisStatus "error"
+            puts stderr "ERROR: Network error in shared first pass: $status"
+        } else {
+            displayErrorInTab $tabIdx "Network error in first pass: $status"
+        }
         return
     }
 
     if {$ncode != 200} {
-        displayErrorInTab $tabIdx "API error in first pass (HTTP $ncode):\n$data"
+        if {$isShared} {
+            updateAnalysisStatus "error"
+            puts stderr "ERROR: API error in shared first pass (HTTP $ncode): $data"
+        } else {
+            displayErrorInTab $tabIdx "API error in first pass (HTTP $ncode):\n$data"
+        }
         return
     }
 
@@ -823,21 +909,41 @@ proc handleFirstPassResponse {tabIdx originalText promptName token} {
                     return
                 }
 
-                # Store the first-pass result
-                set firstPassResult($tabIdx) $analysisJson
-                puts stderr "INFO: First pass complete for tab $tabIdx"
-
-                # Now proceed to second pass (style rewrite)
-                callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+                if {$isShared} {
+                    # Shared analysis: store globally and trigger styling
+                    set sharedAnalysisResult $analysisJson
+                    puts stderr "INFO: Shared first pass complete"
+                    updateAnalysisStatus "done"
+                    triggerSelectedTabStyling
+                } else {
+                    # Per-tab analysis (legacy path): proceed directly to second pass
+                    puts stderr "INFO: First pass complete for tab $tabIdx"
+                    callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+                }
             } else {
-                displayErrorInTab $tabIdx "First pass: unexpected response format (missing message content)"
+                if {$isShared} {
+                    updateAnalysisStatus "error"
+                    puts stderr "ERROR: Shared first pass: missing message content"
+                } else {
+                    displayErrorInTab $tabIdx "First pass: unexpected response format (missing message content)"
+                }
             }
         } else {
-            displayErrorInTab $tabIdx "First pass: unexpected response format (missing choices)"
+            if {$isShared} {
+                updateAnalysisStatus "error"
+                puts stderr "ERROR: Shared first pass: missing choices"
+            } else {
+                displayErrorInTab $tabIdx "First pass: unexpected response format (missing choices)"
+            }
         }
     } err opt]} {
         set errorInfo [dict get $opt -errorinfo]
-        displayErrorInTab $tabIdx "Error processing first-pass response:\n$err\n\nDetails:\n$errorInfo"
+        if {$isShared} {
+            updateAnalysisStatus "error"
+            puts stderr "ERROR: Error processing shared first-pass response: $err\n$errorInfo"
+        } else {
+            displayErrorInTab $tabIdx "Error processing first-pass response:\n$err\n\nDetails:\n$errorInfo"
+        }
     }
 }
 
@@ -889,14 +995,20 @@ proc extractJSON {text} {
 }
 
 proc retryFirstPassStrict {tabIdx originalText promptName} {
-    global apiKey apiBase apiModel httpTokens FIRST_PASS_PROMPT userTextPrefix tabTextWidgets
+    global apiKey apiBase apiModel httpTokens FIRST_PASS_PROMPT userTextPrefix tabTextWidgets analysisStatusWidget
+
+    set isShared [expr {$tabIdx == -1}]
 
     # Update UI
-    set textWidget $tabTextWidgets($tabIdx)
-    $textWidget configure -state normal
-    $textWidget delete 1.0 end
-    $textWidget insert 1.0 "Retrying 1st pass (stricter JSON)..."
-    $textWidget configure -state disabled
+    if {$isShared} {
+        $analysisStatusWidget configure -text "\u231B Retrying analysis..."
+    } else {
+        set textWidget $tabTextWidgets($tabIdx)
+        $textWidget configure -state normal
+        $textWidget delete 1.0 end
+        $textWidget insert 1.0 "Retrying 1st pass (stricter JSON)..."
+        $textWidget configure -state disabled
+    }
 
     package require http
     package require tls
@@ -913,8 +1025,11 @@ proc retryFirstPassStrict {tabIdx originalText promptName} {
         Authorization "Bearer $apiKey" \
         Content-Type "application/json; charset=utf-8"]
 
+    set logMsg [expr {$isShared ? "shared" : "tab $tabIdx"}]
+    set tokenKey [expr {$isShared ? "shared" : $tabIdx}]
+
     if {[catch {
-        puts stderr "INFO: Retrying first-pass with stricter prompt for tab $tabIdx"
+        puts stderr "INFO: Retrying first-pass with stricter prompt ($logMsg)"
         set token [http::geturl $url \
             -method POST \
             -headers $headers \
@@ -922,19 +1037,26 @@ proc retryFirstPassStrict {tabIdx originalText promptName} {
             -query $jsonPayload \
             -timeout 60000 \
             -command [list handleFirstPassRetryResponse $tabIdx $originalText $promptName]]
-        set httpTokens($tabIdx) $token
+        set httpTokens($tokenKey) $token
     } err]} {
         # Fall back to single-pass on retry failure
         puts stderr "WARNING: First pass retry failed, falling back to single-pass"
-        fallbackSinglePass $tabIdx $originalText $promptName
+        if {$isShared} {
+            fallbackSharedAnalysis
+        } else {
+            fallbackSinglePass $tabIdx $originalText $promptName
+        }
     }
 }
 
 proc handleFirstPassRetryResponse {tabIdx originalText promptName token} {
-    global httpTokens firstPassResult
+    global httpTokens sharedAnalysisResult
 
-    if {[info exists httpTokens($tabIdx)]} {
-        unset httpTokens($tabIdx)
+    set isShared [expr {$tabIdx == -1}]
+    set tokenKey [expr {$isShared ? "shared" : $tabIdx}]
+
+    if {[info exists httpTokens($tokenKey)]} {
+        unset httpTokens($tokenKey)
     }
 
     set status [http::status $token]
@@ -944,8 +1066,12 @@ proc handleFirstPassRetryResponse {tabIdx originalText promptName token} {
     http::cleanup $token
 
     if {$status ne "ok" || $ncode != 200} {
-        puts stderr "WARNING: First pass retry failed, falling back to single-pass"
-        fallbackSinglePass $tabIdx $originalText $promptName
+        puts stderr "WARNING: First pass retry failed, falling back"
+        if {$isShared} {
+            fallbackSharedAnalysis
+        } else {
+            fallbackSinglePass $tabIdx $originalText $promptName
+        }
         return
     }
 
@@ -959,22 +1085,36 @@ proc handleFirstPassRetryResponse {tabIdx originalText promptName token} {
 
         # Validate JSON
         if {[catch {json::json2dict $analysisJson}]} {
-            puts stderr "WARNING: First pass retry still invalid JSON, falling back to single-pass"
-            fallbackSinglePass $tabIdx $originalText $promptName
+            puts stderr "WARNING: First pass retry still invalid JSON, falling back"
+            if {$isShared} {
+                fallbackSharedAnalysis
+            } else {
+                fallbackSinglePass $tabIdx $originalText $promptName
+            }
             return
         }
 
-        set firstPassResult($tabIdx) $analysisJson
-        puts stderr "INFO: First pass retry successful for tab $tabIdx"
-        callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+        if {$isShared} {
+            set sharedAnalysisResult $analysisJson
+            puts stderr "INFO: Shared first pass retry successful"
+            updateAnalysisStatus "done"
+            triggerSelectedTabStyling
+        } else {
+            puts stderr "INFO: First pass retry successful for tab $tabIdx"
+            callSecondPassAPI $tabIdx $originalText $promptName $analysisJson
+        }
     } err]} {
-        puts stderr "WARNING: Error in retry response, falling back to single-pass"
-        fallbackSinglePass $tabIdx $originalText $promptName
+        puts stderr "WARNING: Error in retry response, falling back"
+        if {$isShared} {
+            fallbackSharedAnalysis
+        } else {
+            fallbackSinglePass $tabIdx $originalText $promptName
+        }
     }
 }
 
 proc fallbackSinglePass {tabIdx originalText promptName} {
-    global tabTextWidgets userTextPrefix firstPassResult
+    global tabTextWidgets userTextPrefix
 
     set textWidget $tabTextWidgets($tabIdx)
     $textWidget configure -state normal
@@ -984,12 +1124,20 @@ proc fallbackSinglePass {tabIdx originalText promptName} {
 
     puts stderr "WARNING: Using single-pass fallback for tab $tabIdx"
 
-    # Set empty first-pass result
-    set firstPassResult($tabIdx) "{\"preserve\":[],\"intensifiers\":[],\"ambiguities\":[],\"rewrite_constraints\":[]}"
-
     set systemPrompt [getPromptContent $promptName]
     set wrappedText "${userTextPrefix}${originalText}\n"
     callDeepSeekAPI $systemPrompt $wrappedText $tabIdx $originalText
+}
+
+proc fallbackSharedAnalysis {} {
+    global sharedAnalysisResult
+
+    puts stderr "WARNING: Using fallback for shared analysis (empty constraints)"
+
+    # Set empty analysis result and proceed
+    set sharedAnalysisResult "{\"preserve\":[],\"intensifiers\":[],\"ambiguities\":[],\"rewrite_constraints\":[]}"
+    updateAnalysisStatus "done"
+    triggerSelectedTabStyling
 }
 
 proc callSecondPassAPI {tabIdx originalText promptName analysisJson} {
@@ -1281,6 +1429,50 @@ proc displayErrorInTab {tabIdx message} {
 
 
 #==============================================================================
+# SHARED ANALYSIS (TWO-PASS MODE)
+#==============================================================================
+
+proc startSharedAnalysis {} {
+    global clipboardText analysisState
+    if {$analysisState ne "idle"} return  ;# prevent duplicate calls
+    updateAnalysisStatus "running"
+    callFirstPassAPI $clipboardText -1 ""  ;# -1 = shared analysis, no specific tab
+}
+
+proc triggerSelectedTabStyling {} {
+    global notebook prompts tabTextWidgets sharedAnalysisResult clipboardText processingTabs
+
+    set tabIdx [$notebook index current]
+    if {$tabIdx < 0 || $tabIdx >= [llength $prompts]} return
+
+    # Skip if already processing this tab
+    if {[info exists processingTabs($tabIdx)] && $processingTabs($tabIdx)} {
+        return
+    }
+
+    set promptName [lindex [lindex $prompts $tabIdx] 0]
+    set tabFrame $notebook.tab$tabIdx
+
+    # Ensure text widget exists
+    if {![winfo exists $tabFrame.text]} {
+        createTabTextWidget $tabIdx
+    }
+
+    # Mark as processing
+    set processingTabs($tabIdx) 1
+
+    # Start styling for this tab
+    set textWidget $tabTextWidgets($tabIdx)
+    $textWidget configure -state normal -background #f5f5f5
+    $textWidget delete 1.0 end
+    $textWidget insert 1.0 "Styling..."
+    $textWidget configure -state disabled
+
+    puts stderr "INFO: Auto-triggering style pass for tab $tabIdx ($promptName)"
+    callSecondPassAPI $tabIdx $clipboardText $promptName $sharedAnalysisResult
+}
+
+#==============================================================================
 # MAIN ENTRY POINT
 #==============================================================================
 
@@ -1335,8 +1527,14 @@ proc main {} {
         puts stderr "INFO: Using prompt '$currentPrompt'"
     }
     
-    # Select the initial tab - this triggers onTabChanged which starts transformation
+    # Select the initial tab
     $notebook select $foundIdx
+
+    # In two-pass mode, start shared analysis immediately
+    # (tab selection no longer triggers analysis, only styling after analysis completes)
+    if {$TWO_PASS_MODE} {
+        startSharedAnalysis
+    }
 }
 
 # Run main
