@@ -37,6 +37,14 @@ Analyze the text and output ONLY valid JSON with this structure:
       ]
     }
   ],
+  "ordering": {
+    "text_type": "narrative|instruction|request|memo|task|mixed",
+    "setting": ["who/where/situation that frames everything else - e.g. 'we are foreign travellers with a rental car'"],
+    "events": ["what happened, timeline, incident details - in their natural sequence"],
+    "payload": ["the main point: request/question/action/conclusion"],
+    "recommended_order": ["setting", "events", "payload"],
+    "reasoning": "why this ordering makes sense for this text"
+  },
   "rewrite_constraints": ["constraint 1", "constraint 2"]
 }
 
@@ -56,9 +64,22 @@ Guidelines:
      A) sleep time blocked; booking links created (more likely if context is about setting up interviews)
      B) both items blocked (less likely given "links are made" implies creation)
 
-4. REWRITE CONSTRAINTS: Provide clear instructions for the style pass, e.g.:
+4. ORDERING: Identify three distinct layers and their optimal sequence:
+   - SETTING = who/where/situation that frames everything (e.g., "we are foreign travellers with a rental car in Edinburgh"). This establishes the reader's frame of reference.
+   - EVENTS = what happened, timeline, incident details. For narratives, chronological order often IS the argument (timestamps as evidence). For instructions, step order is usually intentional.
+   - PAYLOAD = the main point: request, question, conclusion, action items.
+   
+   Typical patterns:
+   - Narrative seeking help: setting → events → question (reader needs to know WHO before understanding WHAT happened)
+   - Instruction/memo: payload first OR setting → steps
+   - Request with justification: setting → reasoning → request
+   
+   Analyse what ordering best serves the text's purpose. If the author buried the setting at the end but it logically should frame the whole text, recommend moving it first.
+
+5. REWRITE CONSTRAINTS: Provide clear instructions for the style pass, e.g.:
    - "Preserve 'dire need' - encodes urgency and willingness-to-pay"
    - "Treat 'sleep time to be blocked' and '30min/15min links are made' as two separate actions"
+   - "Lead with setting 'foreign travellers with rental car in Edinburgh' before the incident timeline"
 
 Output ONLY the JSON object, no other text.}
 
@@ -1000,6 +1021,7 @@ CRITICAL RULES:
 - Resolve ambiguities using the interpretation with higher probability from the analysis.
 - If ambiguity probabilities are close (within 20 percentage points), keep the original wording for that span.
 - Preserve intensifiers marked with \"keep\": true.
+- ORDERING: Follow the \"ordering\" analysis. Arrange the output according to \"recommended_order\" (typically: setting → events → payload). Setting establishes who/where/situation. Events are the timeline/incident. Payload is the request/question/conclusion.
 
 === STYLE GUIDE ===
 $styleGuide
