@@ -1,1 +1,0 @@
-Remove the folder "License forms - prework" (which contains "Blank Forms" and "Filled Forms"). We only look at specific forms when needed, not at all blank or filled forms.
